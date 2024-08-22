@@ -161,15 +161,27 @@ class INBETWEEN_OT_generate(bpy.types.Operator):
         return requests.post(url, files=files, data=data, headers=headers, timeout=1000)
 
     def insert_inbetween_frames(self, inbetween_frames, start_frame, output_dir):
+        self.report({'INFO'}, f"Starting to insert {len(inbetween_frames)} frames")
+
         for i, frame_data in enumerate(inbetween_frames):
-            frame_number = start_frame + i
-            self.insert_frame(frame_data, frame_number, output_dir)
+            try:
+                frame_number = start_frame + i
+                self.report({'INFO'}, f"Inserting frame {i+1} of {len(inbetween_frames)}")
+                self.insert_frame(frame_data, frame_number, output_dir)
+                self.report({'INFO'}, f"Successfully inserted frame {i+1}")
+            except Exception as e:
+                self.report({'ERROR'}, f"Error inserting frame {i+1}: {str(e)}")
+                break
 
-        # Ensure all strips are visible in the sequence editor
-        for strip in bpy.context.scene.sequence_editor.sequences_all:
-            strip.mute = False
+        try:
+            # Ensure all strips are visible in the sequence editor
+            for strip in bpy.context.scene.sequence_editor.sequences_all:
+                strip.mute = False
 
-        bpy.context.view_layer.update()
+            bpy.context.view_layer.update()
+            self.report({'INFO'}, "Finished inserting frames and updating view layer")
+        except Exception as e:
+            self.report({'ERROR'}, f"Error after inserting frames: {str(e)}")
 
     def ensure_gp_visibility(self):
         gp_object = bpy.data.objects.get("InbetweenAnimation")
@@ -200,47 +212,52 @@ class INBETWEEN_OT_generate(bpy.types.Operator):
 
 
     def insert_frame(self, frame_data, frame_number, output_dir):
-        scene = bpy.context.scene
-        scene.frame_set(frame_number)
+        try:
+            self.report({'INFO'}, f"Starting to insert frame {frame_number}")
+            scene = bpy.context.scene
+            scene.frame_set(frame_number)
 
-        if not output_dir:
-            self.report({'ERROR'}, "Please select an output directory first")
-            return {'CANCELLED'}
+            if not output_dir:
+                self.report({'ERROR'}, "Please select an output directory first")
+                return {'CANCELLED'}
 
-        path = os.path.join(output_dir, f"frame_{frame_number}.png")
+            path = os.path.join(output_dir, f"frame_{frame_number}.png")
 
-        # Decode the base64 string to bytes
-        decoded_data = base64.b64decode(frame_data)
+            # Decode the base64 string to bytes
+            decoded_data = base64.b64decode(frame_data)
 
-        # Create a temporary file
-        with open(path, 'wb') as file:
-            file.write(decoded_data)
+            # Create a temporary file
+            with open(path, 'wb') as file:
+                file.write(decoded_data)
 
-        # Create a new Blender image
-        image_name = f"Inbetween_{frame_number}"
-        new_image = bpy.data.images.load(path)
-        new_image.name = image_name
+            # Create a new Blender image
+            image_name = f"Inbetween_{frame_number}"
+            new_image = bpy.data.images.load(path)
+            new_image.name = image_name
 
-        # Ensure we have a sequence editor
-        if not scene.sequence_editor:
-            scene.sequence_editor_create()
+            # Ensure we have a sequence editor
+            if not scene.sequence_editor:
+                scene.sequence_editor_create()
 
-        # Create a new image strip
-        strip = scene.sequence_editor.sequences.new_image(
-            name=image_name,
-            filepath=path,
-            channel=1,
-            frame_start=frame_number
-        )
+            # Create a new image strip
+            strip = scene.sequence_editor.sequences.new_image(
+                name=image_name,
+                filepath=path,
+                channel=1,
+                frame_start=frame_number
+            )
 
-        # Set the duration
-        strip.frame_final_duration = 1  # Set duration to 1 frame
+            # Set the duration
+            strip.frame_final_duration = 1  # Set duration to 1 frame
 
-        # Update the scene
-        bpy.context.view_layer.update()
+            # Update the scene
+            bpy.context.view_layer.update()
 
-        self.report({'INFO'}, path)
-        self.report({'INFO'}, f"Inserted frame {frame_number}")
+            self.report({'INFO'}, path)
+            self.report({'INFO'}, f"Successfully inserted frame {frame_number}")
+        except Exception as e:
+            self.report({'ERROR'}, f"Error in insert_frame for frame {frame_number}: {str(e)}")
+            raise  # Re-raise the exception to be caught in insert_inbetween_frames
 
 class INBETWEEN_OT_settings(bpy.types.Operator):
     bl_idname = "inbetween.settings"
