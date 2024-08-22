@@ -97,7 +97,7 @@ class INBETWEEN_OT_generate(bpy.types.Operator):
             self.ensure_gp_visibility()
             self.report({'INFO'}, f"Generated {len(inbetween_frames)} in-between frames")
         else:
-            self.report({'ERROR'}, "Failed to generate in-betweens")
+            self.report({'ERROR'}, f"Failed to generate in-betweens. Status code: {response.status_code}")
 
         self._is_running = False
         context.scene.inbetween_is_running = False
@@ -158,10 +158,10 @@ class INBETWEEN_OT_generate(bpy.types.Operator):
             'frame_stride': frame_stride
         }
 
-        return requests.post(url, files=files, data=data, headers=headers)
+        return requests.post(url, files=files, data=data, headers=headers, timeout=1000)
 
     def insert_inbetween_frames(self, inbetween_frames, start_frame, output_dir):
-        for i, frame_data in enumerate(inbetween_frames, start=1):
+        for i, frame_data in enumerate(inbetween_frames):
             frame_number = start_frame + i
             self.insert_frame(frame_data, frame_number, output_dir)
 
