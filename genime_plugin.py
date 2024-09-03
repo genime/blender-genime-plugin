@@ -51,6 +51,9 @@ class INBETWEEN_OT_generate(bpy.types.Operator):
     def cancel(self, context):
         wm = context.window_manager
         wm.event_timer_remove(self._timer)
+        self._is_running = False
+        context.scene.inbetween_is_running = False
+        self.report({'INFO'}, "In-betweening process cancelled")
 
     def generate_inbetweens(self, context):
         scene = context.scene
@@ -303,6 +306,17 @@ class INBETWEEN_OT_settings(bpy.types.Operator):
         else:
             layout.prop(self, "local_address")
 
+class INBETWEEN_OT_cancel(bpy.types.Operator):
+    bl_idname = "inbetween.cancel"
+    bl_label = "Cancel In-betweening"
+    bl_description = "Cancel the ongoing in-betweening process"
+
+    def execute(self, context):
+        if context.scene.inbetween_is_running:
+            context.scene.inbetween_is_running = False
+            self.report({'INFO'}, "Cancelling in-betweening process...")
+        return {'FINISHED'}
+
 class INBETWEEN_PT_panel(bpy.types.Panel):
     bl_label = "In-betweening Generator"
     bl_idname = "INBETWEEN_PT_panel"
@@ -328,6 +342,7 @@ class INBETWEEN_PT_panel(bpy.types.Panel):
         layout.prop(scene, "inbetween_output_dir")
         if scene.inbetween_is_running:
             layout.label(text="Generating in-betweens...", icon='RENDER_STILL')
+            layout.operator("inbetween.cancel", text="Cancel", icon='CANCEL')
         else:
             layout.operator("inbetween.generate")
 
@@ -335,6 +350,7 @@ def register():
     bpy.utils.register_class(INBETWEEN_OT_generate)
     bpy.utils.register_class(INBETWEEN_PT_panel)
     bpy.utils.register_class(INBETWEEN_OT_settings)
+    bpy.utils.register_class(INBETWEEN_OT_cancel)
     bpy.types.Scene.inbetween_start_frame = bpy.props.IntProperty(name="Start Frame", default=1)
     bpy.types.Scene.inbetween_end_frame = bpy.props.IntProperty(name="End Frame", default=10)
     bpy.types.Scene.prompt = bpy.props.StringProperty(name="Prompt")
@@ -369,6 +385,7 @@ def unregister():
     bpy.utils.unregister_class(INBETWEEN_OT_generate)
     bpy.utils.unregister_class(INBETWEEN_PT_panel)
     bpy.utils.unregister_class(INBETWEEN_OT_settings)
+    bpy.utils.unregister_class(INBETWEEN_OT_cancel)
     del bpy.types.Scene.inbetween_start_frame
     del bpy.types.Scene.inbetween_end_frame
     del bpy.types.Scene.prompt
