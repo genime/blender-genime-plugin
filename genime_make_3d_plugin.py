@@ -1,8 +1,9 @@
 import bpy
+import base64
+import gzip
 import requests
 import tempfile
 import os
-import base64
 import threading
 import uuid
 
@@ -15,6 +16,8 @@ bl_info = {
     "description": "Generate 3D models given image prompts",
     "category": "Animation",
 }
+
+SERVER_URL = "https://genime--comfy-3d-app-comfyui-api.modal.run"
 
 class MAKE3D_OT_generate_model(bpy.types.Operator):
     bl_idname = "make3d.generate_model"
@@ -87,31 +90,46 @@ class MAKE3D_OT_generate_model(bpy.types.Operator):
             return
 
         if response.status_code == 200:
-            response_data = response.json()
-            model_url = response_data.get('model_url')
-            if not model_url:
-                self.report({'ERROR'}, "Invalid response from server: 'model_url' not found.")
-                self._is_running = False
-                context.scene.make3d_is_running = False
-                return
+            result = response.json()
+            if 'files' in result and 'mesh_t_1.obj.gz' in result['files']:
+                compressed_file_content = result['files']['mesh_t_1.obj.gz']
+                output_folder_path = tempfile.gettempdir()
+                compressed_file_path = os.path.join(output_folder_path, "mesh_t_1.obj.gz")
+                decompressed_file_path = os.path.join(output_folder_path, "mesh_t_1.obj")
 
-            # Download the 3D model
-            try:
-                model_path = self.download_model(model_url)
-            except Exception as e:
-                self.report({'ERROR'}, f"Failed to download model: {str(e)}")
-                self._is_running = False
-                context.scene.make3d_is_running = False
-                return
+                # Save the compressed file locally
+                try:
+                    with open(compressed_file_path, 'wb') as compressed_file:
+                        compressed_file.write(base64.b64decode(compressed_file_content))
+                except Exception as e:
+                    self.report({'ERROR'}, f"Failed to save compressed file: {str(e)}")
+                    self._is_running = False
+                    context.scene.make3d_is_running = False
+                    return
 
-            # Import the 3D model into Blender
-            try:
-                self.import_model(model_path)
-                self.report({'INFO'}, "3D model successfully imported.")
-            except Exception as e:
-                self.report({'ERROR'}, f"Failed to import model: {str(e)}")
+                # Decompress the file
+                try:
+                    with gzip.open(compressed_file_path, 'rb') as compressed_file:
+                        with open(decompressed_file_path, 'wb') as decompressed_file:
+                            decompressed_file.write(compressed_file.read())
+                    self.report({'INFO'}, f"Decompressed file saved at: {decompressed_file_path}")
+                except Exception as e:
+                    self.report({'ERROR'}, f"Failed to decompress file: {str(e)}")
+                    self._is_running = False
+                    context.scene.make3d_is_running = False
+                    return
+                
+                # Import the decompressed OBJ model into Blender
+                try:
+                    self.import_model(decompressed_file_path)
+                    self.report({'INFO'}, "3D model successfully imported.")
+                except Exception as e:
+                    self.report({'ERROR'}, f"Failed to import model: {str(e)}")
+            else:
+                self.report({'ERROR'}, "Error: Compressed file 'mesh_t_1.obj.gz' not found in the response.")
+
         else:
-            self.report({'ERROR'}, f"Server responded with status code: {response.status_code}")
+            self.report({'ERROR'}, f"Failed to receive a valid response. Status code: {response.status_code}")
 
         self._is_running = False
         context.scene.make3d_is_running = False
@@ -120,8 +138,9 @@ class MAKE3D_OT_generate_model(bpy.types.Operator):
         scene = bpy.context.scene
 
         if scene.make3d_use_hosted_server:
-            url = "https://comfy-server.example.com/generate-3d"
-            headers = {"Authorization": f"Bearer {scene.make3d_api_key}"}
+            url = SERVER_URL
+            headers = {}
+            # headers = {"Authorization": f"Bearer {scene.make3d_api_key}"}
         else:
             url = f"{scene.make3d_local_address}/generate-3d"
             headers = {}
