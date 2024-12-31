@@ -28,7 +28,7 @@ class MAKE3D_OT_generate_model(bpy.types.Operator):
     _timer = None
     _thread = None
     _is_running = False
-
+    _temp_file_path = None
 
     @classmethod
     def poll(cls, context):
@@ -69,6 +69,7 @@ class MAKE3D_OT_generate_model(bpy.types.Operator):
         scene = context.scene
         image_path = scene.make3d_image_path
         timeout_minutes = scene.make3d_timeout_minutes
+        output_folder_path = scene.make3d_output_dir
 
         # Read the selected image
         try:
@@ -80,6 +81,7 @@ class MAKE3D_OT_generate_model(bpy.types.Operator):
             context.scene.make3d_is_running = False
             return
 
+        
         # Send image to Comfy server
         try:
             response = self.send_to_comfy_server(image_data, timeout_minutes)
@@ -93,7 +95,6 @@ class MAKE3D_OT_generate_model(bpy.types.Operator):
             result = response.json()
             if 'files' in result and 'mesh_t_1.obj.gz' in result['files']:
                 compressed_file_content = result['files']['mesh_t_1.obj.gz']
-                output_folder_path = tempfile.gettempdir()
                 compressed_file_path = os.path.join(output_folder_path, "mesh_t_1.obj.gz")
                 decompressed_file_path = os.path.join(output_folder_path, "mesh_t_1.obj")
 
@@ -119,42 +120,30 @@ class MAKE3D_OT_generate_model(bpy.types.Operator):
                     context.scene.make3d_is_running = False
                     return
                 
-                # Import the decompressed OBJ model into Blender
-                try:
-                    self.import_model(decompressed_file_path)
-                    self.report({'INFO'}, "3D model successfully imported.")
-                except Exception as e:
-                    self.report({'ERROR'}, f"Failed to import model: {str(e)}")
-            else:
-                self.report({'ERROR'}, "Error: Compressed file 'mesh_t_1.obj.gz' not found in the response.")
 
+                decompressed_file_path = os.path.join(output_folder_path, "mesh_t_1.obj")
+                self.report({'INFO'}, f"Importing model from: {decompressed_file_path}")
+                self._temp_file_path = decompressed_file_path
+                bpy.app.timers.register(self.import_model_on_main_thread)
+                self.report({'INFO'}, "3D model successfully imported.")
         else:
             self.report({'ERROR'}, f"Failed to receive a valid response. Status code: {response.status_code}")
 
         self._is_running = False
         context.scene.make3d_is_running = False
 
-    def send_to_comfy_server(self, image_data, prompt, timeout_minutes):
-        scene = bpy.context.scene
+    def send_to_comfy_server(self, image_data, timeout_minutes):
+        # scene = bpy.context.scene
 
-        if scene.make3d_use_hosted_server:
-            url = SERVER_URL
-            headers = {}
-            # headers = {"Authorization": f"Bearer {scene.make3d_api_key}"}
-        else:
-            url = f"{scene.make3d_local_address}/generate-3d"
-            headers = {}
-
+        url = SERVER_URL
+        # headers = {"Authorization": f"Bearer {scene.make3d_api_key}"}
+    
         files = {
             'image': ('image.png', image_data, 'image/png')
         }
 
-        data = {
-            'prompt': prompt,
-            'timeout': timeout_minutes * 60  # Convert minutes to seconds
-        }
 
-        return requests.post(url, files=files, data=data, headers=headers, timeout=timeout_minutes * 60 + 60)
+        return requests.post(url, files=files, timeout=timeout_minutes * 60 + 60)
 
 
     def download_model(self, model_url):
@@ -172,16 +161,25 @@ class MAKE3D_OT_generate_model(bpy.types.Operator):
             raise Exception(f"Failed to download model. Status code: {response.status_code}")
         
     
-    def import_model(self, model_path):
-        ext = os.path.splitext(model_path)[1].lower()
-        if ext == '.obj':
-            bpy.ops.import_scene.obj(filepath=model_path)
-        elif ext == '.fbx':
-            bpy.ops.import_scene.fbx(filepath=model_path)
-        elif ext == '.gltf' or ext == '.glb':
-            bpy.ops.import_scene.gltf(filepath=model_path)
-        else:
-            raise Exception(f"Unsupported model format: {ext}")
+    
+    def import_model_on_main_thread(self):
+        """Imports the OBJ model on Blender's main thread."""
+        if self._temp_file_path:
+            try:
+                # This is the safe way to import on the main thread
+                bpy.ops.wm.obj_import(filepath=self._temp_file_path)
+
+                self.report({'INFO'}, "3D model successfully imported.")
+            except Exception as e:
+                self.report({'ERROR'}, f"Failed to import model: {str(e)}")
+
+            # Cleanup the temp file
+            # os.remove(self._temp_file_path)
+            self._temp_file_path = None
+
+        # Update the is_running flag now that we are done
+        bpy.context.scene.make3d_is_running = False
+        return None
 
 
 class MAKE3D_OT_select_image(bpy.types.Operator):
@@ -203,27 +201,32 @@ class MAKE3D_OT_select_image(bpy.types.Operator):
         return {'RUNNING_MODAL'}
 
 
+class MAKE3D_OT_select_output_dir(bpy.types.Operator):
+    bl_idname = "make3d.select_output_dir"
+    bl_label = "Select Output Directory"
+    bl_description = "Select the directory where the decompressed 3D model will be saved"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    directory = bpy.props.StringProperty(
+        name="Directory",
+        description="Directory to save the decompressed 3D model",
+        subtype='DIR_PATH'
+    )
+
+    def execute(self, context):
+        context.scene.make3d_output_dir = self.directory
+        self.report({'INFO'}, f"Output directory set to: {self.directory}")
+        return {'FINISHED'}
+
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
+
+
 class MAKE3D_OT_settings(bpy.types.Operator):
     bl_idname = "make3d.settings"
     bl_label = "3D Generation Settings"
     bl_options = {'REGISTER', 'INTERNAL'}
-
-    use_hosted_server = bpy.props.BoolProperty(
-        name="Use Hosted Server",
-        description="Use a hosted Comfy server instead of a local one",
-        default=True
-    )
-
-    api_key = bpy.props.StringProperty(
-        name="API Key",
-        description="API Key for the hosted server"
-    )
-
-    local_address = bpy.props.StringProperty(
-        name="Local Server Address",
-        description="Address of the local Comfy server",
-        default="http://127.0.0.1:8188"
-    )
 
     timeout_minutes = bpy.props.IntProperty(
         name="Timeout (Minutes)",
@@ -235,17 +238,11 @@ class MAKE3D_OT_settings(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
-        scene.make3d_use_hosted_server = self.use_hosted_server
-        scene.make3d_api_key = self.api_key
-        scene.make3d_local_address = self.local_address
         scene.make3d_timeout_minutes = self.timeout_minutes
         return {'FINISHED'}
 
     def invoke(self, context, event):
         scene = context.scene
-        self.use_hosted_server = scene.make3d_use_hosted_server
-        self.api_key = scene.make3d_api_key
-        self.local_address = scene.make3d_local_address
         self.timeout_minutes = scene.make3d_timeout_minutes
         return context.window_manager.invoke_props_dialog(self)
 
@@ -276,6 +273,11 @@ class MAKE3D_PT_panel(bpy.types.Panel):
         row.operator("make3d.select_image", text="Select Image", icon='FILE_FOLDER')
         row.prop(scene, "make3d_image_path", text="")
 
+        # Select Output Directory
+        row = layout.row()
+        row.operator("make3d.select_output_dir", text="Select Output Directory", icon='FILE_FOLDER')
+        row.prop(scene, "make3d_output_dir", text="")
+
         layout.prop(scene, "make3d_timeout_minutes")
 
         if scene.make3d_is_running:
@@ -299,6 +301,7 @@ class MAKE3D_OT_cancel(bpy.types.Operator):
 def register():
     bpy.utils.register_class(MAKE3D_OT_generate_model)
     bpy.utils.register_class(MAKE3D_OT_select_image)
+    bpy.utils.register_class(MAKE3D_OT_select_output_dir)
     bpy.utils.register_class(MAKE3D_PT_panel)
     bpy.utils.register_class(MAKE3D_OT_settings)
     bpy.utils.register_class(MAKE3D_OT_cancel)
@@ -309,27 +312,21 @@ def register():
         subtype='FILE_PATH'
     )
 
-    bpy.types.Scene.make3d_use_hosted_server = bpy.props.BoolProperty(
-        name="Use Hosted Server",
-        description="Use the hosted Comfy server instead of a local one",
-        default=True
-    )
-    bpy.types.Scene.make3d_api_key = bpy.props.StringProperty(
-        name="API Key",
-        description="API Key for the hosted server"
-    )
-    bpy.types.Scene.make3d_local_address = bpy.props.StringProperty(
-        name="Local Server Address",
-        description="Address of the local Comfy server",
-        default="http://127.0.0.1:8188"
-    )
     bpy.types.Scene.make3d_timeout_minutes = bpy.props.IntProperty(
         name="Timeout (Minutes)",
         description="Maximum time to wait for server response",
-        default=10,
+        default=20,
         min=1,
         max=30
     )
+
+    bpy.types.Scene.make3d_output_dir = bpy.props.StringProperty(
+        name="Output Directory",
+        description="Directory to save the decompressed 3D model",
+        subtype='DIR_PATH',
+        default=""  # You can set a default path if desired
+    )
+
     bpy.types.Scene.make3d_is_running = bpy.props.BoolProperty(default=False)
 
 
@@ -339,11 +336,9 @@ def unregister():
     bpy.utils.unregister_class(MAKE3D_PT_panel)
     bpy.utils.unregister_class(MAKE3D_OT_settings)
     bpy.utils.unregister_class(MAKE3D_OT_cancel)
+    bpy.utils.unregister_class(MAKE3D_OT_select_output_dir)
 
     del bpy.types.Scene.make3d_image_path
-    del bpy.types.Scene.make3d_use_hosted_server
-    del bpy.types.Scene.make3d_api_key
-    del bpy.types.Scene.make3d_local_address
     del bpy.types.Scene.make3d_timeout_minutes
     del bpy.types.Scene.make3d_is_running
 
