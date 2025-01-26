@@ -157,6 +157,11 @@ class MAKE3D_OT_generate_model(bpy.types.Operator):
             self._model_format = model_format
             bpy.app.timers.register(self.import_model_on_main_thread)
             self.report({'INFO'}, "3D model successfully processed.")
+        elif response.status_code == 429:
+            self.report({'ERROR'}, "You have reached your usage limit. Please try again later or upgrade your plan.")
+            self._is_running = False
+            context.scene.make3d_is_running = False
+            return
         else:
             self.report({'ERROR'}, f"Failed to receive a valid response. Status code: {response.status_code}")
 
