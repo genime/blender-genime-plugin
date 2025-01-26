@@ -29,6 +29,7 @@ class MAKE3D_OT_generate_model(bpy.types.Operator):
     _thread = None
     _is_running = False
     _temp_file_path = None
+    _model_format = None
 
     @classmethod
     def poll(cls, context):
@@ -38,6 +39,10 @@ class MAKE3D_OT_generate_model(bpy.types.Operator):
     def execute(self, context):
         if not context.scene.make3d_image_path:
             self.report({'ERROR'}, "No image selected. Please select an image first.")
+            return {'CANCELLED'}
+
+        if not context.scene.make3d_user_key:
+            self.report({'ERROR'}, "No API key provided. Please add your key in the Settings.")
             return {'CANCELLED'}
 
         context.scene.make3d_is_running = True
@@ -81,7 +86,6 @@ class MAKE3D_OT_generate_model(bpy.types.Operator):
             context.scene.make3d_is_running = False
             return
 
-        
         # Send image to Comfy server
         try:
             response = self.send_to_comfy_server(image_data, timeout_minutes)
@@ -93,39 +97,66 @@ class MAKE3D_OT_generate_model(bpy.types.Operator):
 
         if response.status_code == 200:
             result = response.json()
-            if 'files' in result and 'mesh_t_1.obj.gz' in result['files']:
-                compressed_file_content = result['files']['mesh_t_1.obj.gz']
-                compressed_file_path = os.path.join(output_folder_path, "mesh_t_1.obj.gz")
-                decompressed_file_path = os.path.join(output_folder_path, "mesh_t_1.obj")
+            if 'files' not in result:
+                self.report({'ERROR'}, "No files received in response")
+                self._is_running = False
+                context.scene.make3d_is_running = False
+                return
 
-                # Save the compressed file locally
-                try:
-                    with open(compressed_file_path, 'wb') as compressed_file:
-                        compressed_file.write(base64.b64decode(compressed_file_content))
-                except Exception as e:
-                    self.report({'ERROR'}, f"Failed to save compressed file: {str(e)}")
-                    self._is_running = False
-                    context.scene.make3d_is_running = False
-                    return
+            # Debug print to see what files we're receiving
+            self.report({'INFO'}, f"Received files: {list(result['files'].keys())}")
 
-                # Decompress the file
-                try:
-                    with gzip.open(compressed_file_path, 'rb') as compressed_file:
-                        with open(decompressed_file_path, 'wb') as decompressed_file:
-                            decompressed_file.write(compressed_file.read())
-                    self.report({'INFO'}, f"Decompressed file saved at: {decompressed_file_path}")
-                except Exception as e:
-                    self.report({'ERROR'}, f"Failed to decompress file: {str(e)}")
-                    self._is_running = False
-                    context.scene.make3d_is_running = False
-                    return
-                
+            # Check for either GLB or OBJ file by extension pattern
+            model_file_key = None
+            model_format = None
+            
+            # Find first file ending with .glb.gz or .obj.gz
+            for file_key in result['files'].keys():
+                if file_key.endswith('.glb.gz'):
+                    model_file_key = file_key
+                    model_format = 'glb'
+                    break
+                elif file_key.endswith('.obj.gz'):
+                    model_file_key = file_key
+                    model_format = 'obj'
+                    break
 
-                decompressed_file_path = os.path.join(output_folder_path, "mesh_t_1.obj")
-                self.report({'INFO'}, f"Importing model from: {decompressed_file_path}")
-                self._temp_file_path = decompressed_file_path
-                bpy.app.timers.register(self.import_model_on_main_thread)
-                self.report({'INFO'}, "3D model successfully imported.")
+            if not model_file_key:
+                self.report({'ERROR'}, f"No supported model format found in response. Available files: {list(result['files'].keys())}")
+                self._is_running = False
+                context.scene.make3d_is_running = False
+                return
+
+            compressed_file_content = result['files'][model_file_key]
+            compressed_file_path = os.path.join(output_folder_path, model_file_key)
+            decompressed_file_path = os.path.join(output_folder_path, model_file_key.replace('.gz', ''))
+
+            # Save the compressed file locally
+            try:
+                with open(compressed_file_path, 'wb') as compressed_file:
+                    compressed_file.write(base64.b64decode(compressed_file_content))
+            except Exception as e:
+                self.report({'ERROR'}, f"Failed to save compressed file: {str(e)}")
+                self._is_running = False
+                context.scene.make3d_is_running = False
+                return
+
+            # Decompress the file
+            try:
+                with gzip.open(compressed_file_path, 'rb') as compressed_file:
+                    with open(decompressed_file_path, 'wb') as decompressed_file:
+                        decompressed_file.write(compressed_file.read())
+                self.report({'INFO'}, f"Decompressed file saved at: {decompressed_file_path}")
+            except Exception as e:
+                self.report({'ERROR'}, f"Failed to decompress file: {str(e)}")
+                self._is_running = False
+                context.scene.make3d_is_running = False
+                return
+
+            self._temp_file_path = decompressed_file_path
+            self._model_format = model_format
+            bpy.app.timers.register(self.import_model_on_main_thread)
+            self.report({'INFO'}, "3D model successfully processed.")
         else:
             self.report({'ERROR'}, f"Failed to receive a valid response. Status code: {response.status_code}")
 
@@ -133,17 +164,19 @@ class MAKE3D_OT_generate_model(bpy.types.Operator):
         context.scene.make3d_is_running = False
 
     def send_to_comfy_server(self, image_data, timeout_minutes):
-        # scene = bpy.context.scene
-
         url = SERVER_URL
-        # headers = {"Authorization": f"Bearer {scene.make3d_api_key}"}
     
         files = {
             'image': ('image.png', image_data, 'image/png')
         }
 
+        params = {
+            'workflow_name': 'trellis',
+            'compress_mesh': True,
+            'user_key': bpy.context.scene.make3d_user_key
+        }
 
-        return requests.post(url, files=files, timeout=timeout_minutes * 60 + 60)
+        return requests.post(url, files=files, params=params, timeout=timeout_minutes * 60 + 60)
 
 
     def download_model(self, model_url):
@@ -163,19 +196,23 @@ class MAKE3D_OT_generate_model(bpy.types.Operator):
     
     
     def import_model_on_main_thread(self):
-        """Imports the OBJ model on Blender's main thread."""
+        """Imports the model on Blender's main thread."""
         if self._temp_file_path:
             try:
-                # This is the safe way to import on the main thread
-                bpy.ops.wm.obj_import(filepath=self._temp_file_path)
+                # Import based on format
+                if self._model_format == 'glb':
+                    bpy.ops.import_scene.gltf(filepath=self._temp_file_path)
+                else:  # obj format
+                    bpy.ops.wm.obj_import(filepath=self._temp_file_path)
 
-                self.report({'INFO'}, "3D model successfully imported.")
+                self.report({'INFO'}, f"3D model successfully imported as {self._model_format.upper()}")
             except Exception as e:
                 self.report({'ERROR'}, f"Failed to import model: {str(e)}")
 
             # Cleanup the temp file
             # os.remove(self._temp_file_path)
             self._temp_file_path = None
+            self._model_format = None
 
         # Update the is_running flag now that we are done
         bpy.context.scene.make3d_is_running = False
@@ -228,7 +265,7 @@ class MAKE3D_OT_settings(bpy.types.Operator):
     bl_label = "3D Generation Settings"
     bl_options = {'REGISTER', 'INTERNAL'}
 
-    timeout_minutes = bpy.props.IntProperty(
+    timeout_minutes: bpy.props.IntProperty(
         name="Timeout (Minutes)",
         description="Maximum time to wait for server response",
         default=10,
@@ -236,23 +273,28 @@ class MAKE3D_OT_settings(bpy.types.Operator):
         max=30
     )
 
+    user_key: bpy.props.StringProperty(
+        name="API Key",
+        description="Your API key for the service",
+        default="",
+        subtype='PASSWORD'  # This will show the key as dots for security
+    )
+
     def execute(self, context):
         scene = context.scene
         scene.make3d_timeout_minutes = self.timeout_minutes
+        scene.make3d_user_key = self.user_key
         return {'FINISHED'}
 
     def invoke(self, context, event):
         scene = context.scene
         self.timeout_minutes = scene.make3d_timeout_minutes
+        self.user_key = scene.make3d_user_key
         return context.window_manager.invoke_props_dialog(self)
 
     def draw(self, context):
         layout = self.layout
-        layout.prop(self, "use_hosted_server")
-        if self.use_hosted_server:
-            layout.prop(self, "api_key")
-        else:
-            layout.prop(self, "local_address")
+        layout.prop(self, "user_key")
         layout.prop(self, "timeout_minutes")
 
 
@@ -329,6 +371,13 @@ def register():
 
     bpy.types.Scene.make3d_is_running = bpy.props.BoolProperty(default=False)
 
+    bpy.types.Scene.make3d_user_key = bpy.props.StringProperty(
+        name="API Key",
+        description="Your API key for the service",
+        default="",
+        subtype='PASSWORD'
+    )
+
 
 def unregister():
     bpy.utils.unregister_class(MAKE3D_OT_generate_model)
@@ -341,6 +390,7 @@ def unregister():
     del bpy.types.Scene.make3d_image_path
     del bpy.types.Scene.make3d_timeout_minutes
     del bpy.types.Scene.make3d_is_running
+    del bpy.types.Scene.make3d_user_key
 
 if __name__ == "__main__":
     register()
