@@ -157,6 +157,11 @@ class MAKE3D_OT_generate_model(bpy.types.Operator):
             self._model_format = model_format
             bpy.app.timers.register(self.import_model_on_main_thread)
             self.report({'INFO'}, "3D model successfully processed.")
+        elif response.status_code == 401:
+            self.report({'ERROR'}, "Unauthorized: Invalid API key. Please check your API key in Settings.")
+            self._is_running = False
+            context.scene.make3d_is_running = False
+            return
         elif response.status_code == 429:
             self.report({'ERROR'}, "You have reached your usage limit. Please try again later or upgrade your plan.")
             self._is_running = False
@@ -178,7 +183,7 @@ class MAKE3D_OT_generate_model(bpy.types.Operator):
         params = {
             'workflow_name': 'trellis',
             'compress_mesh': True,
-            'user_key': bpy.context.scene.make3d_user_key
+            'token': bpy.context.scene.make3d_user_key
         }
 
         return requests.post(url, files=files, params=params, timeout=timeout_minutes * 60 + 60)
