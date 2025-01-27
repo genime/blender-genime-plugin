@@ -21,6 +21,8 @@ Blender Genime Plugin is an innovative tool that integrates generative AI capabi
 9. Paste your API key before using the plugin by clicking on Settings:
 ![screenshot](https://github.com/user-attachments/assets/2e42cd9e-1a49-47c3-94a7-cfd336b697c0)
 
+**NOTE: Each API key is only valid for 10 tries. Please contact by creating a github issue for further use.**
+
 
 You can also watch this demo for installation instructions: [Loom](https://www.loom.com/share/e7c0f284d4554c668ba23d3f58f87604?sid=6b654358-1102-473d-a60e-f8be810c5083).
 
